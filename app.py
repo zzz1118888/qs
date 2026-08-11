@@ -73,7 +73,6 @@ st.markdown("""
 # ==========================================
 with st.sidebar:
     st.title("QSCopilot")
-    st.caption("智慧測量創新賽 2026 - 競賽實戰版")
     st.markdown("---")
     
     menu = st.radio("功能導航", [
