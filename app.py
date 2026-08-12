@@ -89,7 +89,7 @@ with st.sidebar:
     st.caption("Admin User: QS Director")
 
 # ==========================================
-# 核心引擎區
+# 核心引擎區 (已切換為智譜 GLM-4-Flash)
 # ==========================================
 def extract_text(file):
     pdf_reader = PyPDF2.PdfReader(file)
@@ -97,13 +97,13 @@ def extract_text(file):
     return text
 
 def analyze_risk_dynamic(text):
-    DEEPSEEK_API_KEY = "sk-3f04b63a30a145708e976283a5ee69b6"
+    ZHIPU_API_KEY = "25b637c706134b1d99a60e0eda8001b7.6YQivJ8rbIDlNSTc"
     analyze_text = text[:4000]
     
     try:
         client = OpenAI(
-            api_key=DEEPSEEK_API_KEY,
-            base_url="https://api.deepseek.com"
+            api_key=ZHIPU_API_KEY,
+            base_url="https://open.bigmodel.cn/api/paas/v4/"
         )
         
         system_prompt = """
@@ -119,7 +119,7 @@ def analyze_risk_dynamic(text):
         """
 
         response = client.chat.completions.create(
-            model="deepseek-chat",
+            model="glm-4-flash",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"請分析此合約前段內容：\n{analyze_text}"}
@@ -153,7 +153,7 @@ def analyze_risk_dynamic(text):
         
     except Exception as e:
         print(f"API Error: {e}")
-        return 50, ["AI 語意分析連線超時，請檢查網路或 API 狀態。"], 0
+        return 50, [f"系統提示：AI 語意分析連線失敗。詳細錯誤代碼：{str(e)}"], 0
 
 def calculate_topology_matrix():
     nodes = ['主合約', '免責條款', '索賠程序', '特殊凌駕條款']
@@ -166,12 +166,12 @@ def calculate_topology_matrix():
     return nodes, A
 
 def call_real_llm_api(prompt, context_text):
-    DEEPSEEK_API_KEY = "sk-3f04b63a30a145708e976283a5ee69b6"
+    ZHIPU_API_KEY = "25b637c706134b1d99a60e0eda8001b7.6YQivJ8rbIDlNSTc"
     
     try:
         client = OpenAI(
-            api_key=DEEPSEEK_API_KEY,
-            base_url="https://api.deepseek.com"
+            api_key=ZHIPU_API_KEY,
+            base_url="https://open.bigmodel.cn/api/paas/v4/"
         )
         
         system_prompt = f"""
@@ -186,7 +186,7 @@ def call_real_llm_api(prompt, context_text):
         """
 
         response = client.chat.completions.create(
-            model="deepseek-chat",
+            model="glm-4-flash",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": prompt}
