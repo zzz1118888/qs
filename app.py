@@ -6,6 +6,7 @@ import re
 import numpy as np
 from openai import OpenAI
 import io
+import math
 
 # ==========================================
 # 網頁基本設定 & 終極視覺 CSS
@@ -89,7 +90,7 @@ with st.sidebar:
     st.caption("Admin User: QS Director")
 
 # ==========================================
-# 核心引擎區 (智譜 GLM-4-Flash，資深嚴苛 QS 版)
+# 核心引擎區
 # ==========================================
 def extract_text(file):
     pdf_reader = PyPDF2.PdfReader(file)
@@ -167,15 +168,76 @@ def analyze_risk_dynamic(text):
         print(f"API Error: {e}")
         return 50, [f"系統提示：AI 語意分析連線失敗。詳細錯誤代碼：{str(e)}"], 0
 
-def calculate_topology_matrix():
-    nodes = ['主合約', '免責條款', '索賠程序', '特殊凌駕條款']
-    A = np.array([
-        [0, 1, 1, 0],
-        [0, 0, 0, 0],
-        [0, 0, 0, 0],
-        [0, 1, 0, 0]  
-    ])
-    return nodes, A
+def calculate_topology_matrix_dynamic(text):
+    ZHIPU_API_KEY = "25b637c706134b1d99a60e0eda8001b7.6YQivJ8rbIDlNSTc"
+    analyze_text = text[:4000]
+    
+    try:
+        client = OpenAI(
+            api_key=ZHIPU_API_KEY,
+            base_url="https://open.bigmodel.cn/api/paas/v4/"
+        )
+        
+        system_prompt = """
+        你是一位香港資深合約法務專家。請分析以下合約內容，找出 3 到 5 個關鍵的「條款節點」，並判斷它們之間是否存在「法務依賴」或「邏輯衝突」。
+        請嚴格依照以下格式輸出，不要加任何其他文字或 emoji：
+        NODES: [節點1], [節點2], [節點3]
+        EDGES: [節點A的索引]-[節點B的索引], [節點C的索引]-[節點D的索引] (注意：索引從0開始計算。例如 0-1 代表第一個節點指向第二個節點產生關聯)
+        WARNING: [用一句話總結合約中最大的依賴或衝突風險。若無明顯衝突，請回覆：未偵測到明顯的條款衝突。]
+        
+        範例輸出：
+        NODES: 主合約, 付款條款, 驗收標準, 延期罰款
+        EDGES: 0-1, 1-2, 3-1
+        WARNING: 延期罰款與付款條款存在強依賴，若驗收延遲將觸發連鎖扣款死結。
+        """
+
+        response = client.chat.completions.create(
+            model="glm-4-flash",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"請分析此合約的拓撲關聯：\n{analyze_text}"}
+            ],
+            temperature=0.1,
+            max_tokens=400
+        )
+        
+        ans = response.choices[0].message.content
+        
+        nodes = []
+        edges = []
+        warning = "未偵測到明顯的條款衝突。"
+        
+        for line in ans.split('\n'):
+            line = line.strip()
+            if line.startswith('NODES:'):
+                nodes = [n.strip() for n in line.replace('NODES:', '').split(',') if n.strip()]
+            elif line.startswith('EDGES:'):
+                edge_strs = [e.strip() for e in line.replace('EDGES:', '').split(',') if e.strip()]
+                for e in edge_strs:
+                    parts = e.split('-')
+                    if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                        edges.append((int(parts[0]), int(parts[1])))
+            elif line.startswith('WARNING:'):
+                warning = line.replace('WARNING:', '').strip()
+                
+        if not nodes or len(nodes) < 2:
+            nodes = ['主合約', '一般條款']
+            edges = [(0, 1)]
+            warning = "文本過短或無法識別具體關聯。"
+            
+        n_len = len(nodes)
+        A = np.zeros((n_len, n_len), dtype=int)
+        for i, j in edges:
+            if i < n_len and j < n_len:
+                A[i][j] = 1 
+                
+        return nodes, A, warning
+        
+    except Exception as e:
+        print(f"Topology API Error: {e}")
+        nodes = ['主合約', '系統錯誤']
+        A = np.array([[0, 1], [0, 0]])
+        return nodes, A, f"AI 拓撲運算連線失敗：{str(e)}"
 
 def call_real_llm_api(prompt, context_text):
     ZHIPU_API_KEY = "25b637c706134b1d99a60e0eda8001b7.6YQivJ8rbIDlNSTc"
@@ -233,6 +295,8 @@ if menu == "總覽儀表板":
                 })
                 if 'ai_dynamic_keywords' in st.session_state:
                     del st.session_state['ai_dynamic_keywords']
+                if 'topology_data' in st.session_state:
+                    del st.session_state['topology_data']
 
     if 'raw_text' in st.session_state:
         st.success(f"解析完成：{st.session_state['filename']} (處理時間: 1.85s | 萃取字元數: {len(st.session_state['raw_text']):,})")
@@ -285,15 +349,15 @@ elif menu == "AI 審閱雷達":
             if st.button("啟動 AI 深度語意高亮掃描", type="primary"):
                 with st.spinner("AI 正在逐字閱讀合約，尋找隱蔽風險..."):
                     extraction_prompt = """
-                    請找出以下合約文本中，所有「高風險、對承建商極度不利、或是定義過於模糊」的具體詞彙或短句（例如：不合理的時效、霸王條款、高額罰款、或是僅寫「工程中期」等過於簡略的節點）。
+                    請找出以下合約文本中，所有「高風險、對承建商極度不利、或是定義過於模糊」的具體詞彙或短句。
                     嚴格遵守以下規則：
                     1. 只能輸出原文中「確切存在」的字眼，一個字都不能改。
-                    2. 每個找出的詞彙或短句之間，請用一個半形逗號 (,) 分隔。
-                    3. 絕對不要輸出任何解釋、問候語或其他的廢話，只需要輸出詞彙列表。
+                    2. 每個找出的詞彙或短句之間，請用一個垂直線 (|) 分隔。
+                    3. 絕對不要輸出任何解釋或廢話，只需要輸出詞彙列表。
                     4. 絕對不准使用任何 emoji 表情符號。
                     """
                     ai_extracted_str = call_real_llm_api(extraction_prompt, st.session_state['raw_text'])
-                    dynamic_keywords = [kw.strip() for kw in ai_extracted_str.split(',') if kw.strip()]
+                    dynamic_keywords = [kw.strip() for kw in ai_extracted_str.split('|') if kw.strip()]
                     st.session_state['ai_dynamic_keywords'] = dynamic_keywords
                     st.success(f"AI 掃描完成！共抓取出 {len(dynamic_keywords)} 處高風險隱患。")
             
@@ -351,39 +415,49 @@ elif menu == "AI 審閱雷達":
 # ==========================================
 elif menu == "矩陣拓撲衝突偵測":
     st.header("矩陣拓撲衝突偵測")
-    st.markdown(r"運用線性代數中的相鄰矩陣 $A^k$，自動追蹤並可視化跨越百頁合約的隱蔽依賴關係與邏輯衝突。")
+    st.markdown(r"運用線性代數中的相鄰矩陣 $A^k$，由 AI 實際掃描並建立當前合約中各條款之間的依賴與邏輯衝突。")
     
     if 'raw_text' in st.session_state:
-        st.warning("系統提示警告：發現隱蔽的依賴衝突！")
-        st.markdown("""
-        > **AI 矩陣運算結果顯示：**
-        > 第一部分的「一般免責條款」與第二部分的「特殊凌駕條款」在文本語意空間中產生高強度的向量衝突。
-        > 凌駕聲明強制覆蓋了原有的免責條款，這在法務上將形成對承建商極度不利的單向賠償死結。
-        """)
+        if st.button("啟動 AI 拓撲結構重算", type="primary") or 'topology_data' not in st.session_state:
+            with st.spinner("AI 正在建構多維度相鄰矩陣..."):
+                nodes, A, warning = calculate_topology_matrix_dynamic(st.session_state['raw_text'])
+                st.session_state['topology_data'] = {'nodes': nodes, 'A': A, 'warning': warning}
         
-        nodes, A = calculate_topology_matrix()
+        t_data = st.session_state['topology_data']
+        nodes = t_data['nodes']
+        A = t_data['A']
         
+        if "無" not in t_data['warning'] and "未偵測到" not in t_data['warning']:
+            st.warning(f"系統提示警告：發現隱蔽的依賴衝突！\n\nAI 矩陣分析結論：{t_data['warning']}")
+        else:
+            st.success(f"系統分析結果：{t_data['warning']}")
+        
+        n_len = len(nodes)
+        pos_x = []
+        pos_y = []
+        for i in range(n_len):
+            angle = 2 * math.pi * i / n_len if n_len > 0 else 0
+            pos_x.append(math.cos(angle) * 2) 
+            pos_y.append(math.sin(angle) * 2)
+            
         fig = go.Figure()
-        pos_x = [1, 2, 2, 3]
-        pos_y = [2, 2.5, 1.5, 2.5]
         
-        for i in range(len(nodes)):
-            for j in range(len(nodes)):
+        for i in range(n_len):
+            for j in range(n_len):
                 if A[i][j] == 1:
-                    color = '#ef4444' if i == 3 else '#cbd5e0'
-                    dash = 'dot' if i == 3 else 'solid'
                     fig.add_trace(go.Scatter(
                         x=[pos_x[i], pos_x[j], None], y=[pos_y[i], pos_y[j], None],
-                        line=dict(width=3 if i == 3 else 2, color=color, dash=dash), mode='lines', hoverinfo='none'
+                        line=dict(width=2, color='#ef4444', dash='dot'), mode='lines', hoverinfo='none'
                     ))
-        
+                    
+        marker_colors = ['#60a5fa' if i == 0 else '#34d399' for i in range(n_len)]
         fig.add_trace(go.Scatter(
             x=pos_x, y=pos_y, mode='markers+text', text=nodes, textposition="bottom center",
-            marker=dict(size=30, color=['#94a3b8', '#34d399', '#60a5fa', '#f87171']), textfont=dict(size=14, color="black")
+            marker=dict(size=35, color=marker_colors, line=dict(width=2, color='white')), 
+            textfont=dict(size=14, color="black", weight="bold")
         ))
         
-        fig.add_annotation(x=(pos_x[3]+pos_x[1])/2, y=(pos_y[3]+pos_y[1])/2 + 0.1, text="Overrides (衝突!)", font=dict(color="red", size=14, weight="bold"), showarrow=False)
-        fig.update_layout(showlegend=False, xaxis=dict(visible=False), yaxis=dict(visible=False), plot_bgcolor="rgba(0,0,0,0)", margin=dict(t=10, l=0, r=0, b=0))
+        fig.update_layout(showlegend=False, xaxis=dict(visible=False, range=[-3, 3]), yaxis=dict(visible=False, range=[-3, 3]), plot_bgcolor="rgba(0,0,0,0)", margin=dict(t=20, l=20, r=20, b=20), height=500)
         st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("系統提示：請先至「總覽儀表板」上傳文件。")
