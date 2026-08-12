@@ -349,23 +349,42 @@ elif menu == "AI 審閱雷達":
             if st.button("啟動 AI 深度語意高亮掃描", type="primary"):
                 with st.spinner("AI 正在逐字閱讀合約，尋找隱蔽風險..."):
                     extraction_prompt = """
-                    請找出以下合約文本中，所有「高風險、對承建商極度不利、或是定義過於模糊」的具體詞彙或短句。
-                    嚴格遵守以下規則：
-                    1. 只能輸出原文中「確切存在」的字眼，一個字都不能改。
-                    2. 每個找出的詞彙或短句之間，請用一個垂直線 (|) 分隔。
-                    3. 絕對不要輸出任何解釋或廢話，只需要輸出詞彙列表。
-                    4. 絕對不准使用任何 emoji 表情符號。
+                    請仔細審閱以下合約文本。你的任務是找出所有「高風險」、「對承建商不利」或「定義過於模糊/缺乏延伸保護(如缺EOT、保留金等)」的條款。
+                    由於必須在原文中標紅，請針對「寫得太簡略的條款」，提取出該段原文作為標示對象。
+                    
+                    嚴格遵守以下輸出格式：
+                    原文短句===具體風險原因|原文短句===具體風險原因
+                    
+                    規則：
+                    1. 「原文短句」必須 100% 完全複製合約中確切存在的字眼，一個字都不能改，否則無法標註。
+                    2. 「具體風險原因」請簡短說明為何該句話有風險（例如：定義模糊、缺乏EOT機制）。
+                    3. 條目之間請用垂直線 (|) 分隔，原文與原因之間用三個等號 (===) 分隔。
+                    4. 如果合約很標準，找不到任何風險，請直接回覆：「未偵測到高風險字眼」。
+                    5. 絕對不准使用任何 emoji 表情符號。
                     """
                     ai_extracted_str = call_real_llm_api(extraction_prompt, st.session_state['raw_text'])
-                    dynamic_keywords = [kw.strip() for kw in ai_extracted_str.split('|') if kw.strip()]
-                    st.session_state['ai_dynamic_keywords'] = dynamic_keywords
-                    st.success(f"AI 掃描完成！共抓取出 {len(dynamic_keywords)} 處高風險隱患。")
+                    
+                    if "未偵測到" in ai_extracted_str:
+                        st.session_state['ai_dynamic_keywords'] = []
+                        st.success("AI 掃描完成！合約用詞標準，未抓取到高風險隱患字眼。")
+                    else:
+                        items = [item.strip() for item in ai_extracted_str.split('|') if item.strip()]
+                        keywords_data = []
+                        for item in items:
+                            if '===' in item:
+                                parts = item.split('===', 1)
+                                keywords_data.append({"keyword": parts[0].strip(), "reason": parts[1].strip()})
+                            else:
+                                keywords_data.append({"keyword": item.strip(), "reason": "定義模糊或具潛在風險"})
+                        st.session_state['ai_dynamic_keywords'] = keywords_data
+                        st.success(f"AI 掃描完成！共抓取出 {len(keywords_data)} 處高風險隱患。")
             
             result_text = st.session_state['raw_text']
             result_text = re.sub(r"(\$[0-9,]+)", r'<span style="background-color: #fef2f2; color: #ef4444; font-weight: bold; border-bottom: 2px solid #ef4444; padding: 2px 4px; border-radius: 4px;">\1</span>', result_text)
 
             if 'ai_dynamic_keywords' in st.session_state:
-                for kw in st.session_state['ai_dynamic_keywords']:
+                for item in st.session_state['ai_dynamic_keywords']:
+                    kw = item["keyword"]
                     if len(kw) > 1:
                         chars = [re.escape(c) for c in kw if c.strip()]
                         if chars:
@@ -387,11 +406,15 @@ elif menu == "AI 審閱雷達":
             st.subheader("風險熱力圖與逐條批註")
             st.markdown(f"**目前合約整體偏離指數：{st.session_state['score']} / 100**")
             
-            if 'ai_dynamic_keywords' in st.session_state:
+            if 'ai_dynamic_keywords' in st.session_state and len(st.session_state['ai_dynamic_keywords']) > 0:
                 st.markdown("### AI 動態鎖定清單")
-                for kw in st.session_state['ai_dynamic_keywords']:
+                for item in st.session_state['ai_dynamic_keywords']:
+                    kw = item["keyword"]
+                    reason = item["reason"]
                     if len(kw) > 1:
-                        st.markdown(f'<div style="background-color: #fef2f2; border-left: 5px solid #ef4444; padding: 10px; margin-bottom: 8px; border-radius: 4px; color: #555;">- {kw}</div>', unsafe_allow_html=True)
+                        st.markdown(f'<div style="background-color: #fef2f2; border-left: 5px solid #ef4444; padding: 10px; margin-bottom: 8px; border-radius: 4px; color: #555;"><strong>標註原文：</strong>{kw}<br><strong>風險原因：</strong>{reason}</div>', unsafe_allow_html=True)
+            elif 'ai_dynamic_keywords' in st.session_state and len(st.session_state['ai_dynamic_keywords']) == 0:
+                 st.info("系統分析完畢，未發現隱患。")
             else:
                 st.info("系統提示：請點擊左側「啟動 AI 深度語意高亮掃描」按鈕，AI 將自動為您標註。")
                 
