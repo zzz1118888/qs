@@ -353,22 +353,23 @@ elif menu == "AI 審閱雷達":
             
             if st.button("啟動 AI 深度語意高亮掃描", type="primary"):
                 with st.spinner("AI 正在逐字閱讀合約，尋找隱蔽風險..."):
-                    # ⚠️ 徹底換掉分隔符，並加上「不准改寫」的最強警告！
+                    # ⚠️ 針對 AI 喜歡提取標題的問題，下達最高指導原則
                     extraction_prompt = """
-                    請仔細審閱以下合約文本。你的任務是找出所有「高風險」、「對承建商不利」或「定義過於模糊/缺乏延伸保護(如缺EOT、保留金等)」的條款。
+                    請仔細審閱以下合約文本。你的任務是找出所有「高風險」、「對承建商不利」或「定義過於模糊」的條款。
+                    
+                    ⚠️ 嚴禁抽取標題！你必須抽取「具有實際風險內容的長句子」（建議至少10個字以上）。
+                    ❌ 錯誤示範：不可抗力與免責、第33條:違約金設定、8.3 免責條款
+                    ✅ 正確示範：雇主對承建商因不可預見之地下管線遷移延誤所導致的任何間接損失、利潤損失, 概不負責。
                     
                     ⚠️ 嚴格輸出格式要求（不准違反）：
-                    請每一行輸出一個風險點，必須使用三個垂直線「|||」分隔，絕對不要使用 Markdown 標題或任何前綴符號（如 1., -, ### 等）。
-                    
+                    請每一行輸出一個風險點，必須使用三個垂直線「|||」分隔。
                     格式範例：
-                    工期: 30 個工作天 ||| 缺乏工期延展(EOT)機制，承建商將承擔極大延誤風險。
-                    付款方式: 簽約 30% ||| 付款節點模糊，無客觀計價標準。
+                    雇主對承建商因不可預見之...概不負責。 ||| 此為霸王免責條款，將所有地質風險轉嫁給承建商。
                     
                     【強制錨定與 100% 複製貼上規則】：
-                    1. 因為我們要在原文中畫紅線，所以「原文短句」必須「100% 複製貼上」自原文！絕對不准自己縮寫或替換詞彙（例如原文寫「首14天」，你就不准改成「首日」）。
-                    2. 如果合約缺乏某個機制（如缺EOT），請強制去原文找最相關的一句條文提取當作錨點。
-                    3. 絕對不能填寫「整體合約缺失」這種原文找不到的字。
-                    4. 每一行一筆資料，中間用 ||| 分隔。絕對不准使用 emoji。
+                    1. 「原文短句」必須「100% 複製貼上」自原文的連續內文！絕對不准自己拼湊標題和內容，也不准添加任何原文沒有的標點符號。
+                    2. 如果合約缺乏某個機制（如缺EOT），請強制去原文找最相關的一句長句子當作錨點（例如抽取整個付款條件段落）。
+                    3. 每一行一筆資料，中間用 ||| 分隔。絕對不准使用 emoji。
                     """
                     ai_extracted_str = call_real_llm_api(extraction_prompt, st.session_state['raw_text'])
                     ai_extracted_str = ai_extracted_str.replace("```", "").replace("text", "").strip()
@@ -377,7 +378,6 @@ elif menu == "AI 審閱雷達":
                     for line in ai_extracted_str.split('\n'):
                         if '|||' in line:
                             parts = line.split('|||', 1)
-                            # 終極 Python 濾水器：把 AI 發神經加的標籤全部強制扒除
                             clean_kw = parts[0].strip()
                             clean_kw = re.sub(r'^(\d+\.|-|\*|#+|原文短句[:：]|標註原文[:：]|\[原文短句\])\s*', '', clean_kw).strip()
                             clean_kw = clean_kw.strip('[]"\'')
@@ -393,19 +393,17 @@ elif menu == "AI 審閱雷達":
             
             result_text = st.session_state['raw_text']
             
-            # CJK 標點與空白寬容匹配引擎
             if 'ai_dynamic_keywords' in st.session_state:
                 for item in st.session_state['ai_dynamic_keywords']:
                     kw = item["keyword"]
                     reason = item["reason"]
                     matched = False
                     
-                    if len(kw) > 3: # 避免抓取過短的無意義字元
+                    if len(kw) > 3: 
                         chars = []
                         for c in kw:
                             if not c.strip():
                                 continue
-                            # 將容易出錯的全半形標點轉換為 Regex 寬容字元集
                             if c in ':：': chars.append('[:：]')
                             elif c in ',，': chars.append('[,，]')
                             elif c in '、': chars.append('[、,，]')
@@ -416,7 +414,6 @@ elif menu == "AI 審閱雷達":
                             else: chars.append(re.escape(c))
                             
                         if chars:
-                            # 使用 [\s\u200b\n]* 來免疫所有空白、換行與隱藏字元
                             pattern = r'[\s\u200b\n]*'.join(chars)
                             replacement = r'<span style="background-color: #fef2f2; color: #ef4444; font-weight: bold; border-bottom: 2px solid #ef4444; padding: 2px 4px; border-radius: 4px;">\g<0></span>'
                             try:
