@@ -353,23 +353,17 @@ elif menu == "AI 審閱雷達":
             
             if st.button("啟動 AI 深度語意高亮掃描", type="primary"):
                 with st.spinner("AI 正在逐字閱讀合約，尋找隱蔽風險..."):
-                    # ⚠️ 針對 AI 喜歡提取標題的問題，下達最高指導原則
                     extraction_prompt = """
                     請仔細審閱以下合約文本。你的任務是找出所有「高風險」、「對承建商不利」或「定義過於模糊」的條款。
                     
-                    ⚠️ 嚴禁抽取標題！你必須抽取「具有實際風險內容的長句子」（建議至少10個字以上）。
-                    ❌ 錯誤示範：不可抗力與免責、第33條:違約金設定、8.3 免責條款
-                    ✅ 正確示範：雇主對承建商因不可預見之地下管線遷移延誤所導致的任何間接損失、利潤損失, 概不負責。
+                    ⚠️ 【極度嚴格：防改寫死命令】：
+                    1. 「原文短句」必須「一字不漏」從原文中複製！AI 常犯致命錯誤：原文寫「具備」，AI 改成「擁有」；原文寫「首14天」，AI 改成「首日」。只要你改了任何一個字，系統就會崩潰！
+                    2. 嚴禁抽取標題！必須抽取「具有實際風險內容的長句子」。
                     
                     ⚠️ 嚴格輸出格式要求（不准違反）：
                     請每一行輸出一個風險點，必須使用三個垂直線「|||」分隔。
                     格式範例：
-                    雇主對承建商因不可預見之...概不負責。 ||| 此為霸王免責條款，將所有地質風險轉嫁給承建商。
-                    
-                    【強制錨定與 100% 複製貼上規則】：
-                    1. 「原文短句」必須「100% 複製貼上」自原文的連續內文！絕對不准自己拼湊標題和內容，也不准添加任何原文沒有的標點符號。
-                    2. 如果合約缺乏某個機制（如缺EOT），請強制去原文找最相關的一句長句子當作錨點（例如抽取整個付款條件段落）。
-                    3. 每一行一筆資料，中間用 ||| 分隔。絕對不准使用 emoji。
+                    雇主對承建商因不可預見之地下管線遷移...概不負責。 ||| 此為霸王免責條款，將所有地質風險轉嫁給承建商。
                     """
                     ai_extracted_str = call_real_llm_api(extraction_prompt, st.session_state['raw_text'])
                     ai_extracted_str = ai_extracted_str.replace("```", "").replace("text", "").strip()
@@ -393,28 +387,20 @@ elif menu == "AI 審閱雷達":
             
             result_text = st.session_state['raw_text']
             
+            # ☢️ 核彈級 CJK 純文字濾水器：完全無視排版與任何標點符號
             if 'ai_dynamic_keywords' in st.session_state:
                 for item in st.session_state['ai_dynamic_keywords']:
                     kw = item["keyword"]
                     reason = item["reason"]
                     matched = False
                     
-                    if len(kw) > 3: 
-                        chars = []
-                        for c in kw:
-                            if not c.strip():
-                                continue
-                            if c in ':：': chars.append('[:：]')
-                            elif c in ',，': chars.append('[,，]')
-                            elif c in '、': chars.append('[、,，]')
-                            elif c in '()%％（）': chars.append(r'[\(\)%％（）]')
-                            elif c in '.。': chars.append('[.。]')
-                            elif c in ';；': chars.append('[;；]')
-                            elif c in '「」""\'\'『』': chars.append(r'[「」""\'\'『』]?')
-                            else: chars.append(re.escape(c))
-                            
-                        if chars:
-                            pattern = r'[\s\u200b\n]*'.join(chars)
+                    if len(kw) > 3:
+                        # 只提取字母、數字、漢字 (剔除所有全半形標點與空白)
+                        chars = [re.escape(c) for c in kw if re.match(r'\w', c)]
+                        
+                        if len(chars) >= 3:
+                            # 允許字元之間存在 0~15 個「非文字字元」(如空白、換行、各種詭異標點)，且不跨越 HTML 標籤
+                            pattern = r'[^\w<>]{0,15}'.join(chars)
                             replacement = r'<span style="background-color: #fef2f2; color: #ef4444; font-weight: bold; border-bottom: 2px solid #ef4444; padding: 2px 4px; border-radius: 4px;">\g<0></span>'
                             try:
                                 result_text, count = re.subn(pattern, replacement, result_text, flags=re.IGNORECASE)
@@ -679,7 +665,7 @@ elif menu == "模組化草擬中心":
 # 主畫面：RAG 合約顧問
 # ==========================================
 elif menu == "RAG 合約顧問":
-    st.header("智能合約顧問")
+    st.header("智能合約顧問 ")
     st.markdown("透過真實 LLM 檢索增強生成 (RAG) 技術，嚴格鎖定上傳文本回答問題。")
     
     if 'raw_text' in st.session_state:
