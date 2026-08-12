@@ -353,7 +353,6 @@ elif menu == "AI 審閱雷達":
             
             if st.button("啟動 AI 深度語意高亮掃描", type="primary"):
                 with st.spinner("AI 正在逐字閱讀合約，尋找隱蔽風險..."):
-                    # ⚠️ 徹底移除方括號範例，並強迫提取純文字
                     extraction_prompt = """
                     請仔細審閱以下合約文本。你的任務是找出所有「高風險」、「對承建商不利」或「定義過於模糊/缺乏延伸保護(如缺EOT、保留金等)」的條款。
                     
@@ -376,7 +375,7 @@ elif menu == "AI 審閱雷達":
                     for line in ai_extracted_str.split('\n'):
                         if '###' in line:
                             parts = line.split('###', 1)
-                            # ⚠️ Python 端強制把 AI 發神經加上的 [] 扒掉
+                            # 扒掉所有惱人的外層方括號
                             clean_kw = parts[0].strip().strip('[]')
                             clean_reason = parts[1].strip().strip('[]')
                             keywords_data.append({"keyword": clean_kw.strip(), "reason": clean_reason.strip()})
@@ -386,6 +385,7 @@ elif menu == "AI 審閱雷達":
             result_text = st.session_state['raw_text']
             result_text = re.sub(r"(\$[0-9,]+)", r'<span style="background-color: #fef2f2; color: #ef4444; font-weight: bold; border-bottom: 2px solid #ef4444; padding: 2px 4px; border-radius: 4px;">\1</span>', result_text)
 
+            # 🛠️ 導入「CJK 標點寬容匹配引擎」
             if 'ai_dynamic_keywords' in st.session_state:
                 for item in st.session_state['ai_dynamic_keywords']:
                     kw = item["keyword"]
@@ -393,12 +393,25 @@ elif menu == "AI 審閱雷達":
                     matched = False
                     
                     if len(kw) > 1 and kw != "整體合約缺失":
-                        chars = [re.escape(c) for c in kw if c.strip()]
+                        chars = []
+                        for c in kw:
+                            if not c.strip():
+                                continue
+                            # 將容易出錯的全半形標點轉換為 Regex 寬容字元集
+                            if c in ':：': chars.append('[:：]')
+                            elif c in ',，': chars.append('[,，]')
+                            elif c in '、': chars.append('[、,，]')
+                            elif c in '()%％（）': chars.append(r'[\(\)%％（）]')
+                            elif c in '.。': chars.append('[.。]')
+                            elif c in ';；': chars.append('[;；]')
+                            else: chars.append(re.escape(c))
+                            
                         if chars:
-                            pattern = r'\s*'.join(chars)
+                            # 使用 [\s\u200b]* 來免疫所有空白、換行與隱藏的零寬度字元
+                            pattern = r'[\s\u200b]*'.join(chars)
                             replacement = r'<span style="background-color: #fef2f2; color: #ef4444; font-weight: bold; border-bottom: 2px solid #ef4444; padding: 2px 4px; border-radius: 4px;">\g<0></span>'
                             try:
-                                result_text, count = re.subn(pattern, replacement, result_text)
+                                result_text, count = re.subn(pattern, replacement, result_text, flags=re.IGNORECASE)
                                 if count > 0:
                                     matched = True
                             except Exception:
@@ -642,7 +655,7 @@ elif menu == "模組化草擬中心":
 第四部份：大灣區供應體系及特殊要求附加條款 (PART 4: GBA & SPECIAL REQUIREMENTS)
 ---------------------------------------------------------
 4.1 針對本專案之額外要求：【{special_req if special_req else '無特殊要求'}】
-4.2 跨境協同與標準互認：若專案涉及大灣區跨境業務，承辦商須承擔所有跨境運輸及相關稅項，並確保供應鏈穩定。相關設備相關設備或服務若採用「大灣區標準」，須提供經認可機構發出之檢測及格證明供審批。
+4.2 跨境協同與標準互認：若專案涉及大灣區跨境業務，承辦商須承擔所有跨境運輸及相關稅項，並確保供應鏈穩定。相關設備或服務若採用「大灣區標準」，須提供經認可機構發出之檢測及格證明供審批。
 
 [本文件由 QSCopilot 依據 HKbidd 專案庫、ICAC 標準範本及大灣區招標規範自動生成]
 """
