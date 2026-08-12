@@ -89,7 +89,7 @@ with st.sidebar:
     st.caption("Admin User: QS Director")
 
 # ==========================================
-# 核心引擎區 (智譜 GLM-4-Flash)
+# 核心引擎區 (已切換為智譜 GLM-4-Flash)
 # ==========================================
 def extract_text(file):
     pdf_reader = PyPDF2.PdfReader(file)
@@ -288,18 +288,11 @@ elif menu == "AI 審閱雷達":
             result_text = st.session_state['raw_text']
             result_text = re.sub(r"(\$[0-9,]+)", r'<span style="background-color: #fef2f2; color: #ef4444; font-weight: bold; border-bottom: 2px solid #ef4444; padding: 2px 4px; border-radius: 4px;">\1</span>', result_text)
 
-            # 新版：使用正則表達式，忽略空格與換行差異來精準標紅
             if 'ai_dynamic_keywords' in st.session_state:
                 for kw in st.session_state['ai_dynamic_keywords']:
                     if len(kw) > 1:
-                        chars = [re.escape(c) for c in kw if c.strip()]
-                        if chars:
-                            pattern = r'\s*'.join(chars)
-                            replacement = r'<span style="background-color: #fef2f2; color: #ef4444; font-weight: bold; border-bottom: 2px solid #ef4444; padding: 2px 4px; border-radius: 4px;">\g<0></span>'
-                            try:
-                                result_text = re.sub(pattern, replacement, result_text)
-                            except Exception:
-                                pass
+                        replacement = f'<span style="background-color: #fef2f2; color: #ef4444; font-weight: bold; border-bottom: 2px solid #ef4444; padding: 2px 4px; border-radius: 4px;">{kw}</span>'
+                        result_text = result_text.replace(kw, replacement)
             
             result_text = result_text.replace('\n', '<br>')
             st.markdown(f"""
@@ -343,7 +336,7 @@ elif menu == "矩陣拓撲衝突偵測":
     st.markdown(r"運用線性代數中的相鄰矩陣 $A^k$，自動追蹤並可視化跨越百頁合約的隱蔽依賴關係與邏輯衝突。")
     
     if 'raw_text' in st.session_state:
-        st.warning("系統偵測警告：發現隱蔽的依賴衝突！")
+        st.warning("**系統偵測警告：發現隱蔽的依賴衝突！**")
         st.markdown("""
         > **AI 矩陣運算結果顯示：**
         > 第一部分的「一般免責條款」與第二部分的「特殊凌駕條款」在文本語意空間中產生高強度的向量衝突。
