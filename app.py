@@ -529,7 +529,7 @@ elif menu == "模組化草擬中心":
 # 主畫面：RAG 合約顧問
 # ==========================================
 elif menu == "RAG 合約顧問":
-    st.header("智能合約顧問 (RAG 實戰版)")
+    st.header("智能合約顧問")
     st.markdown("透過真實 LLM 檢索增強生成 (RAG) 技術，嚴格鎖定上傳文本回答問題。")
     
     if 'raw_text' in st.session_state:
