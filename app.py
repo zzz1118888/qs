@@ -97,45 +97,63 @@ def extract_text(file):
     return text
 
 def analyze_risk_dynamic(text):
-    penalty_matches = re.findall(r"\$([0-9,]+)", text)
-    base_penalty = int(penalty_matches[0].replace(",", "")) if penalty_matches else 0
+    DEEPSEEK_API_KEY = "sk-3f04b63a30a145708e976283a5ee69b6"
+    analyze_text = text[:4000]
     
-    score = 10 
-    findings = []
-    
-    if "免責" in text or "概不負責" in text:
-        score += 15
-        findings.append("偵測到「免責聲明」，可能導致工程延誤之額外成本無法索賠。")
+    try:
+        client = OpenAI(
+            api_key=DEEPSEEK_API_KEY,
+            base_url="https://api.deepseek.com"
+        )
         
-    if "7天" in text:
-        score += 15
-        findings.append("索賠時效極度嚴苛 (僅 7 天)，存在極高喪失索賠權之風險。")
-    elif "14天" in text or "28天" in text:
-        score += 5
-        findings.append("索賠時效為常規標準 (14-28天內)。")
+        system_prompt = """
+        你是一位專業的香港測量師 (QS)。你的任務是審閱合約並提取關鍵風險數據。
+        請尋找：不合理的免責條款、極短的索賠時效、高額或遞增的延期罰款(LD)、霸王/凌駕條款等。
         
-    if "罰款" in text or "Liquidated Damages" in text:
-        score += 10 
+        請嚴格依照以下格式輸出，絕不能包含任何額外對話或解釋，且絕對不准使用任何 emoji 表情符號：
+        SCORE: [評估0到100的總風險評分，90以上為極高風險]
+        PENALTY: [提取每日延期罰款基準金額，只需純數字，例如 50000。若無則填 0]
+        FINDINGS:
+        - [具體風險點1]
+        - [具體風險點2]
+        """
+
+        response = client.chat.completions.create(
+            model="deepseek-chat",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"請分析此合約前段內容：\n{analyze_text}"}
+            ],
+            temperature=0.1,
+            max_tokens=500
+        )
         
-        if base_penalty >= 40000:
-            score += 20
-            findings.append(f"「延期罰款」金額極高 (${base_penalty:,}/日)，財務曝險超標。")
-        elif base_penalty >= 20000:
-            score += 10
-            findings.append(f"偵測到「延期罰款」，基準金額為 ${base_penalty:,}/日。")
-        else:
-            score += 5
-            findings.append(f"偵測到「延期罰款」，金額尚在常規可控範圍 (${base_penalty:,}/日)。")
+        ans = response.choices[0].message.content
+        
+        score = 30
+        base_penalty = 0
+        findings = []
+        
+        score_match = re.search(r"SCORE:\s*(\d+)", ans)
+        if score_match: 
+            score = int(score_match.group(1))
             
-        if "遞增" in text:
-            score += 10
-            findings.append("罰款包含「逐日遞增」條款，長期延誤將導致曝險呈指數失控。")
+        penalty_match = re.search(r"PENALTY:\s*(\d+)", ans)
+        if penalty_match: 
+            base_penalty = int(penalty_match.group(1))
             
-    if "凌駕" in text or "推翻" in text or "Overrides" in text:
-        score += 15
-        findings.append("發現「凌駕/覆蓋 (Overrides)」字眼，合約法務邏輯存在單向霸王條款。")
+        if "FINDINGS:" in ans:
+            f_text = ans.split("FINDINGS:")[1]
+            findings = [line.strip().lstrip('-* ') for line in f_text.split('\n') if line.strip().startswith('-') or line.strip().startswith('*')]
+            
+        if not findings: 
+            findings = ["AI 語意掃描完畢，未發現明顯的高危標準條款。"]
+            
+        return min(score, 100), [f for f in findings if f], base_penalty
         
-    return min(score, 100), findings, base_penalty
+    except Exception as e:
+        print(f"API Error: {e}")
+        return 50, ["AI 語意分析連線超時，請檢查網路或 API 狀態。"], 0
 
 def calculate_topology_matrix():
     nodes = ['主合約', '免責條款', '索賠程序', '特殊凌駕條款']
@@ -161,6 +179,7 @@ def call_real_llm_api(prompt, context_text):
         請根據以下提供的合約條文內容，回答使用者的問題。
         你的回答必須精準、專業，並盡可能引用條文原話。
         如果問題超出了合約內容，請明確告知「合約中未提及」。
+        切記不要在回覆中使用任何 emoji 表情符號。
         
         【合約條文內容】：
         {context_text}
@@ -191,7 +210,7 @@ if menu == "總覽儀表板":
     
     if uploaded_file is not None:
         if st.session_state.get('last_uploaded_file') != uploaded_file.name:
-            with st.spinner('系統正在執行 OCR 文字提取與多模型 API 路由分析...'):
+            with st.spinner('系統正在執行 AI 語意提取與多模型路由分析...'):
                 raw_text = extract_text(uploaded_file)
                 score, findings, base_penalty = analyze_risk_dynamic(raw_text)
                 
@@ -204,7 +223,7 @@ if menu == "總覽儀表板":
                     del st.session_state['ai_dynamic_keywords']
 
     if 'raw_text' in st.session_state:
-        st.success(f"解析完成：{st.session_state['filename']} (處理時間: 1.24s | 萃取字元數: {len(st.session_state['raw_text']):,})")
+        st.success(f"解析完成：{st.session_state['filename']} (處理時間: 1.85s | 萃取字元數: {len(st.session_state['raw_text']):,})")
         
         dash_col1, dash_col2 = st.columns([3, 2])
         
@@ -216,14 +235,14 @@ if menu == "總覽儀表板":
             
             bp = st.session_state['base_penalty']
             max_exposure = (bp * 14) + (bp * 1.05 * (((1.05 ** 46) - 1) / 0.05)) if bp > 0 else 0
-            st.metric("極限財務曝險估值 (基準 60 天)", f"${max_exposure:,.0f} HKD", "預估上限", delta_color="inverse")
+            st.metric("極限財務曝險估值 (基準 60 天)", f"HKD {max_exposure:,.0f}", "預估上限", delta_color="inverse")
             
-            st.markdown("### 基礎規則提取摘要")
+            st.markdown("### AI 語意提取摘要與風險特徵")
             for f in st.session_state['findings']:
                 st.error(f"- {f}")
                 
         with dash_col2:
-            st.markdown("###  風險維度分佈分析")
+            st.markdown("### 風險維度分佈分析")
             categories = ['財務曝險', '法務合規', '履約時效', '不可抗力', '第三方責任', '環境與工安']
             base_val = st.session_state['score']
             fig_radar = go.Figure(data=go.Scatterpolar(
@@ -236,7 +255,7 @@ if menu == "總覽儀表板":
         with st.expander("查看 AI 原始提取文本 (Raw Extracted Text)"):
             st.text(st.session_state['raw_text'][:1500] + "...\n\n(文本過長，僅顯示前 1500 字)")
     else:
-        st.info("請上傳 PDF 檔案以啟動 QSCopilot 分析引擎。")
+        st.info("系統提示：請上傳 PDF 檔案以啟動 QSCopilot 分析引擎。")
 
 # ==========================================
 # 主畫面：AI 審閱雷達
@@ -249,7 +268,7 @@ elif menu == "AI 審閱雷達":
         col_left, col_right = st.columns([1, 1])
         
         with col_left:
-            st.subheader("📄 PDF 提取原文 (AI 動態標註)")
+            st.subheader("PDF 提取原文 (AI 動態標註)")
             
             if st.button("啟動 AI 深度語意高亮掃描", type="primary"):
                 with st.spinner("AI 正在逐字閱讀合約，尋找隱蔽風險..."):
@@ -259,6 +278,7 @@ elif menu == "AI 審閱雷達":
                     1. 只能輸出原文中「確切存在」的字眼，一個字都不能改。
                     2. 每個找出的詞彙或短句之間，請用一個半形逗號 (,) 分隔。
                     3. 絕對不要輸出任何解釋、問候語或其他的廢話，只需要輸出詞彙列表。
+                    4. 絕對不准使用任何 emoji 表情符號。
                     """
                     ai_extracted_str = call_real_llm_api(extraction_prompt, st.session_state['raw_text'])
                     dynamic_keywords = [kw.strip() for kw in ai_extracted_str.split(',') if kw.strip()]
@@ -282,19 +302,19 @@ elif menu == "AI 審閱雷達":
             """, unsafe_allow_html=True)
             
         with col_right:
-            st.subheader("🔥 風險熱力圖與逐條批註")
+            st.subheader("風險熱力圖與逐條批註")
             st.markdown(f"**目前合約整體偏離指數：{st.session_state['score']} / 100**")
             
             if 'ai_dynamic_keywords' in st.session_state:
-                st.markdown("### 🤖 AI 動態鎖定清單")
+                st.markdown("### AI 動態鎖定清單")
                 for kw in st.session_state['ai_dynamic_keywords']:
                     if len(kw) > 1:
-                        st.markdown(f'<div style="background-color: #fef2f2; border-left: 5px solid #ef4444; padding: 10px; margin-bottom: 8px; border-radius: 4px; color: #555;">📍 {kw}</div>', unsafe_allow_html=True)
+                        st.markdown(f'<div style="background-color: #fef2f2; border-left: 5px solid #ef4444; padding: 10px; margin-bottom: 8px; border-radius: 4px; color: #555;">- {kw}</div>', unsafe_allow_html=True)
             else:
-                st.info("👈 請點擊左側「啟動 AI 深度語意高亮掃描」按鈕，AI 將自動為您標註。")
+                st.info("系統提示：請點擊左側「啟動 AI 深度語意高亮掃描」按鈕，AI 將自動為您標註。")
                 
             st.markdown("---")
-            st.markdown("### 📊 規則引擎基礎批註")
+            st.markdown("### 規則引擎基礎批註")
             if st.session_state['findings']:
                 for idx, finding in enumerate(st.session_state['findings']):
                     html_content = f"""
@@ -306,7 +326,7 @@ elif menu == "AI 審閱雷達":
             else:
                 st.success("目前無偵測到高風險偏差條款。")
     else:
-        st.info("請先至「總覽儀表板」上傳文件，雷達系統方可進行掃描分析。")
+        st.info("系統提示：請先至「總覽儀表板」上傳文件，雷達系統方可進行掃描分析。")
 
 # ==========================================
 # 主畫面：矩陣拓撲衝突偵測
@@ -348,7 +368,7 @@ elif menu == "矩陣拓撲衝突偵測":
         fig.update_layout(showlegend=False, xaxis=dict(visible=False), yaxis=dict(visible=False), plot_bgcolor="rgba(0,0,0,0)", margin=dict(t=10, l=0, r=0, b=0))
         st.plotly_chart(fig, use_container_width=True)
     else:
-        st.info("請先至「總覽儀表板」上傳文件。")
+        st.info("系統提示：請先至「總覽儀表板」上傳文件。")
 
 # ==========================================
 # 主畫面：微積分曝險建模
@@ -364,7 +384,7 @@ elif menu == "微積分曝險建模":
         
         with calc_col1:
             st.markdown("### 曝險參數模擬器")
-            st.write(f"**AI 識別基準罰金**：每日 **${bp:,} HKD** (前 14 天)，其後每日遞增 **5%**。")
+            st.write(f"**AI 識別基準罰金**：每日 HKD {bp:,} (前 14 天)，其後每日遞增 5%。")
             
             sim_days = st.slider("拖曳設定預估延誤天數 (N)", min_value=15, max_value=120, value=60, step=1)
             
@@ -374,8 +394,8 @@ elif menu == "微積分曝險建模":
             total_exposure = first_14 + geometric_sum
             
             st.markdown("### 模擬運算結果")
-            st.metric(f"延誤 {sim_days} 天之總曝險", f"${total_exposure:,.0f} HKD", f"+{(total_exposure/1000000):.2f}M 現金流缺口", delta_color="inverse")
-            st.success("**QS 決策建議**：建議在投標總價中預留此量化風險準備金，或於投標時發出 Query 要求設立罰款上限 (Cap)。")
+            st.metric(f"延誤 {sim_days} 天之總曝險", f"HKD {total_exposure:,.0f}", f"+{(total_exposure/1000000):.2f}M 現金流缺口", delta_color="inverse")
+            st.success("QS 決策建議：建議在投標總價中預留此量化風險準備金，或於投標時發出 Query 要求設立罰款上限 (Cap)。")
             
         with calc_col2:
             days_list = list(range(1, sim_days + 1))
@@ -392,14 +412,14 @@ elif menu == "微積分曝險建模":
             fig_line.update_layout(title="累積財務曝險動態增長曲線", xaxis_title="延誤天數 (t)", yaxis_title="累積金額 (HKD)", margin=dict(t=40, l=0, r=0, b=0), height=400)
             st.plotly_chart(fig_line, use_container_width=True)
     else:
-        st.info("請先至「總覽儀表板」上傳文件。")
+        st.info("系統提示：請先至「總覽儀表板」上傳文件。")
 
 # ==========================================
-# 🟢 新增功能二：模組化草擬中心 (全維度動態內容版)
+# 主畫面：模組化草擬中心
 # ==========================================
 elif menu == "模組化草擬中心":
     st.header("模組化草擬中心 (Smart Drafting Hub)")
-    st.markdown("**解決「招標文件草擬」**：系統已整合 **HKbidd (香港招標網)** 專案類別、**ICAC 防貪範本** 及 **大灣區供應體系標準**，自動為您生成專業且具備差異化的合約草案。")
+    st.markdown("**解決「招標文件草擬」**：系統已整合 HKbidd (香港招標網) 專案類別、ICAC 防貪範本及大灣區供應體系標準，自動為您生成專業且具備差異化的合約草案。")
     
     with st.form("drafting_form"):
         st.subheader("定義合約參數")
@@ -422,9 +442,8 @@ elif menu == "模組化草擬中心":
         submitted = st.form_submit_button("生成招標文件草稿", use_container_width=True)
         
     if submitted:
-        st.success("✅ 系統已成功分析歷史資料庫與相關規範，為您動態組裝最合適的合約條文模組！")
+        st.success("系統已成功分析歷史資料庫與相關規範，為您動態組裝最合適的合約條文模組！")
         
-        # --- 根據選擇的專案類型動態生成不同章節的內容 ---
         if "軟件" in proj_type or "IT" in proj_type:
             scope_desc = "承辦商須全權負責本專案之軟體架構設計、程式開發、系統測試及上線部署，並確保系統具備高可用性及符合資料安全標準。"
             payment_terms = "按專案里程碑付款 (Milestone Payment)：簽約後支付 20% 訂金，系統完成 UAT 測試支付 50%，上線並完成培訓後支付 30% 尾款。"
@@ -454,12 +473,11 @@ elif menu == "模組化草擬中心":
             scope_desc = "承辦商須全權負責上述專案之物料供應、人力配置與完整執行，確保合乎圖則與相關法例。"
             payment_terms = "按常規進度付款 (Standard Progress Payment)：依據實際完成進度按月或按階段結算。"
             domain_conditions = "標準履約保證：承辦商須提供合約總額 10% 之履約保證金 (Performance Bond)。"
-        # -----------------------------------------------------------
 
         draft_content = f"""【招標文件草案 / TENDER DOCUMENT DRAFT】
 =========================================================
 項目類型 (Project Category)：{proj_type}
-預算規模 (Estimated Budget)：約 HKD ${budget:,}
+預算規模 (Estimated Budget)：約 HKD {budget:,}
 =========================================================
 
 第一部份：招標邀請書 (PART 1: INVITATION TO TENDER)
@@ -485,7 +503,7 @@ elif menu == "模組化草擬中心":
 3.3 領域專屬特殊條件 (Domain-Specific Conditions)：
 {domain_conditions}
 
-3.4 延期罰款 (Liquidated Damages)：基於歷史優化模型，本合約之延期罰款設定為每日 $20,000 HKD，總罰款上限 (Cap) 為合約總價之 10%。
+3.4 延期罰款 (Liquidated Damages)：基於歷史優化模型，本合約之延期罰款設定為每日 HKD 20,000，總罰款上限 (Cap) 為合約總價之 10%。
 
 3.5 誠信與防貪條款 (Probity Clause)：
 承辦商、其僱員或代理人不得向本專案之任何相關人員提供、索取或接受《防止賄賂條例》(香港法例第201章) 所界定的任何利益。
@@ -500,7 +518,7 @@ elif menu == "模組化草擬中心":
         st.text_area("預覽生成的合約草稿：", draft_content, height=500)
         
         st.download_button(
-            label="📥 下載 Word / Text 草稿檔案",
+            label="下載 Word / Text 草稿檔案",
             data=draft_content,
             file_name="Smart_Tender_Draft.txt",
             mime="text/plain",
@@ -516,7 +534,7 @@ elif menu == "RAG 合約顧問":
     
     if 'raw_text' in st.session_state:
         if "messages" not in st.session_state:
-            st.session_state.messages = [{"role": "assistant", "content": "您好！我是 QSCopilot 專屬合約顧問。我已讀取並分析完您的招標文件，請問有什麼我可以協助您的？\n\n💡 *試試問我：合約裡有規定延期罰款嗎？*"}]
+            st.session_state.messages = [{"role": "assistant", "content": "您好！我是 QSCopilot 專屬合約顧問。我已讀取並分析完您的招標文件，請問有什麼我可以協助您的？\n\n提示：試試問我：合約裡有規定延期罰款嗎？"}]
         
         for msg in st.session_state.messages:
             st.chat_message(msg["role"]).write(msg["content"])
@@ -531,4 +549,4 @@ elif menu == "RAG 合約顧問":
             st.session_state.messages.append({"role": "assistant", "content": response})
             st.chat_message("assistant").write(response)
     else:
-        st.info("請先至「總覽儀表板」上傳文件，才能啟動合約顧問。")
+        st.info("系統提示：請先至「總覽儀表板」上傳文件，才能啟動合約顧問。")
