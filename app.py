@@ -353,46 +353,54 @@ elif menu == "AI 審閱雷達":
             
             if st.button("啟動 AI 深度語意高亮掃描", type="primary"):
                 with st.spinner("AI 正在逐字閱讀合約，尋找隱蔽風險..."):
+                    # ⚠️ 徹底換掉分隔符，並加上「不准改寫」的最強警告！
                     extraction_prompt = """
                     請仔細審閱以下合約文本。你的任務是找出所有「高風險」、「對承建商不利」或「定義過於模糊/缺乏延伸保護(如缺EOT、保留金等)」的條款。
                     
                     ⚠️ 嚴格輸出格式要求（不准違反）：
-                    請每一行輸出一個風險點，必須使用以下格式，絕對不要在文字外面加方括號 []：
-                    原文短句 ### 具體風險原因
+                    請每一行輸出一個風險點，必須使用三個垂直線「|||」分隔，絕對不要使用 Markdown 標題或任何前綴符號（如 1., -, ### 等）。
                     
-                    【強制錨點擷取規則】：
-                    因為我們要將風險在原文中「標紅」，所以即使是「沒寫全」的缺失，你也必須在原文找一句最相關的現有條文當作「錨點」！
-                    1. 如果缺乏工期延展(EOT)或工程變更(VO)，請強制提取原文中關於工期的句子，例如：工期: 30 個工作天
-                    2. 如果缺乏保留金或付款定義模糊，請強制提取原文中關於付款的句子，例如：付款方式: 簽約 30%、工程中期 50%、完工驗收 20%
-                    3. 「原文短句」必須 100% 複製原文中的純文字，絕對不能自己發明詞彙，也「絕對不能」填寫「整體合約缺失」這種抽象字眼！找不到完全對應的，就抓最接近的那句話。
-                    4. 每一行一筆資料，中間用 ### 分隔。
-                    5. 絕對不准使用 emoji。
+                    格式範例：
+                    工期: 30 個工作天 ||| 缺乏工期延展(EOT)機制，承建商將承擔極大延誤風險。
+                    付款方式: 簽約 30% ||| 付款節點模糊，無客觀計價標準。
+                    
+                    【強制錨定與 100% 複製貼上規則】：
+                    1. 因為我們要在原文中畫紅線，所以「原文短句」必須「100% 複製貼上」自原文！絕對不准自己縮寫或替換詞彙（例如原文寫「首14天」，你就不准改成「首日」）。
+                    2. 如果合約缺乏某個機制（如缺EOT），請強制去原文找最相關的一句條文提取當作錨點。
+                    3. 絕對不能填寫「整體合約缺失」這種原文找不到的字。
+                    4. 每一行一筆資料，中間用 ||| 分隔。絕對不准使用 emoji。
                     """
                     ai_extracted_str = call_real_llm_api(extraction_prompt, st.session_state['raw_text'])
                     ai_extracted_str = ai_extracted_str.replace("```", "").replace("text", "").strip()
                     
                     keywords_data = []
                     for line in ai_extracted_str.split('\n'):
-                        if '###' in line:
-                            parts = line.split('###', 1)
-                            # 扒掉所有惱人的外層方括號
-                            clean_kw = parts[0].strip().strip('[]')
-                            clean_reason = parts[1].strip().strip('[]')
-                            keywords_data.append({"keyword": clean_kw.strip(), "reason": clean_reason.strip()})
+                        if '|||' in line:
+                            parts = line.split('|||', 1)
+                            # 終極 Python 濾水器：把 AI 發神經加的標籤全部強制扒除
+                            clean_kw = parts[0].strip()
+                            clean_kw = re.sub(r'^(\d+\.|-|\*|#+|原文短句[:：]|標註原文[:：]|\[原文短句\])\s*', '', clean_kw).strip()
+                            clean_kw = clean_kw.strip('[]"\'')
+                            
+                            clean_reason = parts[1].strip()
+                            clean_reason = re.sub(r'^(風險原因[:：]|具體風險原因[:：]|\[具體風險原因\])\s*', '', clean_reason).strip()
+                            clean_reason = clean_reason.strip('[]"\'')
+                            
+                            if clean_kw and clean_reason:
+                                keywords_data.append({"keyword": clean_kw, "reason": clean_reason})
                             
                     st.session_state['ai_dynamic_keywords'] = keywords_data
             
             result_text = st.session_state['raw_text']
-            result_text = re.sub(r"(\$[0-9,]+)", r'<span style="background-color: #fef2f2; color: #ef4444; font-weight: bold; border-bottom: 2px solid #ef4444; padding: 2px 4px; border-radius: 4px;">\1</span>', result_text)
-
-            # 🛠️ 導入「CJK 標點寬容匹配引擎」
+            
+            # CJK 標點與空白寬容匹配引擎
             if 'ai_dynamic_keywords' in st.session_state:
                 for item in st.session_state['ai_dynamic_keywords']:
                     kw = item["keyword"]
                     reason = item["reason"]
                     matched = False
                     
-                    if len(kw) > 1 and kw != "整體合約缺失":
+                    if len(kw) > 3: # 避免抓取過短的無意義字元
                         chars = []
                         for c in kw:
                             if not c.strip():
@@ -404,11 +412,12 @@ elif menu == "AI 審閱雷達":
                             elif c in '()%％（）': chars.append(r'[\(\)%％（）]')
                             elif c in '.。': chars.append('[.。]')
                             elif c in ';；': chars.append('[;；]')
+                            elif c in '「」""\'\'『』': chars.append(r'[「」""\'\'『』]?')
                             else: chars.append(re.escape(c))
                             
                         if chars:
-                            # 使用 [\s\u200b]* 來免疫所有空白、換行與隱藏的零寬度字元
-                            pattern = r'[\s\u200b]*'.join(chars)
+                            # 使用 [\s\u200b\n]* 來免疫所有空白、換行與隱藏字元
+                            pattern = r'[\s\u200b\n]*'.join(chars)
                             replacement = r'<span style="background-color: #fef2f2; color: #ef4444; font-weight: bold; border-bottom: 2px solid #ef4444; padding: 2px 4px; border-radius: 4px;">\g<0></span>'
                             try:
                                 result_text, count = re.subn(pattern, replacement, result_text, flags=re.IGNORECASE)
@@ -440,7 +449,7 @@ elif menu == "AI 審閱雷達":
                     st.markdown(f'<div style="background-color: #fef2f2; border-left: 5px solid #ef4444; padding: 10px; margin-bottom: 8px; border-radius: 4px; color: #555;"><strong>標註原文：</strong>{item["keyword"]}<br><strong>風險原因：</strong>{item["reason"]}</div>', unsafe_allow_html=True)
                 
                 for item in unmatched_risks:
-                    st.markdown(f'<div style="background-color: #fffbeb; border-left: 5px solid #f59e0b; padding: 10px; margin-bottom: 8px; border-radius: 4px; color: #555;"><strong>潛在合約缺失：</strong>{item["reason"]}<br><span style="font-size: 0.85em; color: #94a3b8;">(AI 嘗試尋找的關聯句但未完全匹配：{item["keyword"]})</span></div>', unsafe_allow_html=True)
+                    st.markdown(f'<div style="background-color: #fffbeb; border-left: 5px solid #f59e0b; padding: 10px; margin-bottom: 8px; border-radius: 4px; color: #555;"><strong>潛在合約缺失：</strong>{item["reason"]}<br><span style="font-size: 0.85em; color: #94a3b8;">(AI 未遵守複製貼上指令，導致無法在原文標紅: {item["keyword"]})</span></div>', unsafe_allow_html=True)
                     
             elif 'ai_dynamic_keywords' in st.session_state and len(st.session_state['ai_dynamic_keywords']) == 0:
                  st.info("系統分析完畢，未發現隱患。")
