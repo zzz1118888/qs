@@ -136,7 +136,7 @@ def analyze_risk_dynamic(text):
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"請分析此合約前段內容：\n{analyze_text}"}
             ],
-            temperature=0.3, # 微調溫度，讓分數更有動態變化
+            temperature=0.3, 
             max_tokens=500
         )
         
@@ -338,61 +338,72 @@ elif menu == "AI 審閱雷達":
     if 'raw_text' in st.session_state:
         col_left, col_right = st.columns([1, 1])
         
+        # 用來記錄真正有被畫上紅線的，以及沒畫上紅線的項目
+        successful_highlights = []
+        unmatched_risks = []
+        
         with col_left:
             st.subheader("PDF 提取原文 (AI 動態標註)")
             
             if st.button("啟動 AI 深度語意高亮掃描", type="primary"):
                 with st.spinner("AI 正在逐字閱讀合約，尋找隱蔽風險..."):
-                    # ⚠️ 這裡加入了「缺失條款映射標註」邏輯
+                    # ⚠️ 全新防呆 Prompt：強制要求按行輸出，並使用嚴格分隔符
                     extraction_prompt = """
-                    請仔細審閱以下合約文本。你的任務是找出所有「高風險」、「對承建商不利」或「定義過於模糊/缺乏延伸保護」的條款。
+                    請仔細審閱以下合約文本。你的任務是找出所有「高風險」、「對承建商不利」或「定義過於模糊/缺乏延伸保護(如缺EOT、保留金等)」的條款。
                     
-                    ⚠️ 關鍵指示：合約中「沒寫全」也是極大的風險！如果遇到沒寫全的狀況，你必須抓取相關的短句來標示：
-                    - 如果缺乏工期延展(EOT)或工程變更(VO)，請提取關於「工期」的原文短句（例如：工期: 30 個工作天）。
-                    - 如果缺乏保留金機制或付款節點模糊，請提取關於「付款方式」或「保固期」的原文短句（例如：付款方式: 簽約 30%...）。
-                    - 如果找不到對應句子，請找出與該風險最相關的一句話。
+                    ⚠️ 嚴格輸出格式要求（不准違反）：
+                    請每一行輸出一個風險點，必須使用以下格式：
+                    [原文短句] ### [具體風險原因]
                     
-                    嚴格遵守以下輸出格式：
-                    原文短句===具體風險原因|原文短句===具體風險原因
+                    範例：
+                    工期: 30 個工作天 ### 缺乏工期延展(EOT)機制，承建商將承擔極大延誤風險。
+                    付款方式: 簽約 30% ### 付款節點模糊，無客觀計價標準。
                     
                     規則：
-                    1. 「原文短句」必須 100% 完全複製合約中確切存在的字眼，一個字都不能改，否則系統無法標註。
-                    2. 「具體風險原因」請說明該句話有何風險，或缺乏了什麼（例如：缺乏EOT、付款定義模糊）。
-                    3. 條目之間用垂直線 (|) 分隔，原文與原因之間用三個等號 (===) 分隔。
+                    1. 「原文短句」必須完全複製合約中確切存在的一段短句，一個字都不能改。
+                    2. 若風險是「沒寫全的條款（例如缺乏保留金）」，請找合約中相關的一句話提取（如擷取保固期的條文），或若真的找不到，[原文短句] 請直接填寫「整體合約缺失」。
+                    3. 每一行一筆資料，中間用 ### 分隔。
                     4. 絕對不准使用任何 emoji 表情符號，不要輸出任何其他廢話。
                     """
                     ai_extracted_str = call_real_llm_api(extraction_prompt, st.session_state['raw_text'])
-                    # 清理可能出現的 markdown 標籤
                     ai_extracted_str = ai_extracted_str.replace("```", "").replace("text", "").strip()
                     
-                    if "未偵測到" in ai_extracted_str:
-                        st.session_state['ai_dynamic_keywords'] = []
-                        st.success("AI 掃描完成！合約用詞標準，未抓取到高風險隱患字眼。")
-                    else:
-                        items = [item.strip() for item in ai_extracted_str.split('|') if item.strip()]
-                        keywords_data = []
-                        for item in items:
-                            if '===' in item:
-                                parts = item.split('===', 1)
-                                keywords_data.append({"keyword": parts[0].strip(), "reason": parts[1].strip()})
-                        st.session_state['ai_dynamic_keywords'] = keywords_data
-                        st.success(f"AI 掃描完成！共抓取出 {len(keywords_data)} 處高風險與缺失隱患。")
+                    keywords_data = []
+                    for line in ai_extracted_str.split('\n'):
+                        if '###' in line:
+                            parts = line.split('###', 1)
+                            keywords_data.append({"keyword": parts[0].strip(), "reason": parts[1].strip()})
+                            
+                    st.session_state['ai_dynamic_keywords'] = keywords_data
             
             result_text = st.session_state['raw_text']
             result_text = re.sub(r"(\$[0-9,]+)", r'<span style="background-color: #fef2f2; color: #ef4444; font-weight: bold; border-bottom: 2px solid #ef4444; padding: 2px 4px; border-radius: 4px;">\1</span>', result_text)
 
+            # ⚠️ 升級版動態標紅：偵測是否成功標紅
             if 'ai_dynamic_keywords' in st.session_state:
                 for item in st.session_state['ai_dynamic_keywords']:
                     kw = item["keyword"]
-                    if len(kw) > 1:
+                    reason = item["reason"]
+                    matched = False
+                    
+                    # 避免去匹配類似「整體合約缺失」這種系統佔位符
+                    if len(kw) > 1 and kw != "整體合約缺失":
                         chars = [re.escape(c) for c in kw if c.strip()]
                         if chars:
                             pattern = r'\s*'.join(chars)
                             replacement = r'<span style="background-color: #fef2f2; color: #ef4444; font-weight: bold; border-bottom: 2px solid #ef4444; padding: 2px 4px; border-radius: 4px;">\g<0></span>'
                             try:
-                                result_text = re.sub(pattern, replacement, result_text)
+                                # subn 會回傳替換的次數 count
+                                result_text, count = re.subn(pattern, replacement, result_text)
+                                if count > 0:
+                                    matched = True
                             except Exception:
                                 pass
+                                
+                    if matched:
+                        successful_highlights.append({"keyword": kw, "reason": reason})
+                    else:
+                        unmatched_risks.append({"keyword": kw, "reason": reason})
             
             result_text = result_text.replace('\n', '<br>')
             st.markdown(f"""
@@ -407,11 +418,15 @@ elif menu == "AI 審閱雷達":
             
             if 'ai_dynamic_keywords' in st.session_state and len(st.session_state['ai_dynamic_keywords']) > 0:
                 st.markdown("### AI 動態鎖定清單")
-                for item in st.session_state['ai_dynamic_keywords']:
-                    kw = item["keyword"]
-                    reason = item["reason"]
-                    if len(kw) > 1:
-                        st.markdown(f'<div style="background-color: #fef2f2; border-left: 5px solid #ef4444; padding: 10px; margin-bottom: 8px; border-radius: 4px; color: #555;"><strong>標註原文：</strong>{kw}<br><strong>風險與缺失原因：</strong>{reason}</div>', unsafe_allow_html=True)
+                
+                # 只有真正畫上紅線的，才顯示「標註原文」
+                for item in successful_highlights:
+                    st.markdown(f'<div style="background-color: #fef2f2; border-left: 5px solid #ef4444; padding: 10px; margin-bottom: 8px; border-radius: 4px; color: #555;"><strong>標註原文：</strong>{item["keyword"]}<br><strong>風險原因：</strong>{item["reason"]}</div>', unsafe_allow_html=True)
+                
+                # 沒被畫紅線的隱性風險，拿掉「標註原文」四字，獨立顯示
+                for item in unmatched_risks:
+                    st.markdown(f'<div style="background-color: #fffbeb; border-left: 5px solid #f59e0b; padding: 10px; margin-bottom: 8px; border-radius: 4px; color: #555;"><strong>潛在合約缺失：</strong>{item["reason"]}</div>', unsafe_allow_html=True)
+                    
             elif 'ai_dynamic_keywords' in st.session_state and len(st.session_state['ai_dynamic_keywords']) == 0:
                  st.info("系統分析完畢，未發現隱患。")
             else:
