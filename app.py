@@ -118,7 +118,7 @@ def analyze_risk_dynamic(text):
            - 是否缺失保留金 (Retention Money) 機制？(保固期將形同虛設)
            - 驗收標準是否為主觀判定？
            
-        【指令】：請根據漏洞的嚴重程度與數量，動態計算 1 到 100 的評分。若是缺失上述關鍵保護條款，請根據缺失的數量，給予 55 至 98 分不等的高風險分數，必須根據具體文本動態給分，絕對不要每次都給一樣的分數！
+        【指令】：請根據漏洞的嚴重程度與數量，動態計算 1 到 100 的評分。若是缺失上述關鍵保護條款，請根據缺失的數量，給予 20 至 98 分不等的高風險分數，必須根據具體文本動態給分，絕對不要每次都給一樣的分數！
 
         請嚴格依照以下格式輸出，絕不能包含任何額外對話或解釋，且絕對不准使用任何 emoji 表情符號：
         SCORE: [評估0到100的總風險評分]
@@ -179,11 +179,17 @@ def calculate_topology_matrix_dynamic(text):
         )
         
         system_prompt = """
-        你是一位香港資深合約法務專家。請分析以下合約內容，找出 3 到 5 個關鍵的「條款節點」，並判斷它們之間是否存在「法務依賴」或「邏輯衝突」。
-        請嚴格依照以下格式輸出，不要加任何其他文字或 emoji：
-        NODES: [節點1], [節點2], [節點3]
-        EDGES: [節點A的索引]-[節點B的索引], [節點C的索引]-[節點D的索引] (注意：索引從0開始計算。例如 0-1 代表第一個節點指向第二個節點產生關聯)
-        WARNING: [用一句話總結合約中最大的依賴或衝突風險。若無明顯衝突，請回覆：未偵測到明顯的條款衝突。]
+        你是一位香港資深合約法務專家。請分析以下合約內容，找出 3 到 5 個關鍵的「條款主題」（例如：主合約、付款條件、工期、保固期），並判斷它們之間是否存在「法務依賴」或「邏輯衝突」。
+        
+        ⚠️ 嚴格格式要求（絕對不要輸出方括號 []，請直接填寫真實名稱）：
+        NODES: 主合約, 付款條件, 工期, 保固期
+        EDGES: 1-2, 2-3
+        WARNING: 付款條件與工期存在強依賴，若中期付款延遲將導致工期無法推進。
+        
+        規則：
+        1. NODES：必須是合約中真實存在的主題，用半形逗號分隔。絕對不准輸出「節點1」這種佔位符。
+        2. EDGES：表示節點間的衝突連線。數字代表 NODES 列表中的索引（從 0 開始）。例如 1-2 代表第二個與第三個節點有衝突。
+        3. WARNING：用一句話具體總結最大的依賴或衝突風險。若無明顯衝突請填寫「未偵測到明顯的條款衝突」。
         """
 
         response = client.chat.completions.create(
@@ -203,22 +209,23 @@ def calculate_topology_matrix_dynamic(text):
         warning = "未偵測到明顯的條款衝突。"
         
         for line in ans.split('\n'):
-            line = line.strip()
+            line = line.strip().replace('[', '').replace(']', '')
             if line.startswith('NODES:'):
-                nodes = [n.strip() for n in line.replace('NODES:', '').split(',') if n.strip()]
+                raw_nodes = line.replace('NODES:', '').split(',')
+                nodes = [n.strip() for n in raw_nodes if n.strip() and "節點" not in n]
             elif line.startswith('EDGES:'):
-                edge_strs = [e.strip() for e in line.replace('EDGES:', '').split(',') if e.strip()]
+                edge_strs = line.replace('EDGES:', '').split(',')
                 for e in edge_strs:
                     parts = e.split('-')
-                    if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
-                        edges.append((int(parts[0]), int(parts[1])))
+                    if len(parts) == 2 and parts[0].strip().isdigit() and parts[1].strip().isdigit():
+                        edges.append((int(parts[0].strip()), int(parts[1].strip())))
             elif line.startswith('WARNING:'):
                 warning = line.replace('WARNING:', '').strip()
                 
         if not nodes or len(nodes) < 2:
-            nodes = ['主合約', '一般條款']
-            edges = [(0, 1)]
-            warning = "文本過短或無法識別具體關聯。"
+            nodes = ['主合約', '付款方式', '工期']
+            edges = [(1, 2)]
+            warning = "AI 提取節點失敗，已載入預設衝突拓撲分析。"
             
         n_len = len(nodes)
         A = np.zeros((n_len, n_len), dtype=int)
@@ -338,7 +345,6 @@ elif menu == "AI 審閱雷達":
     if 'raw_text' in st.session_state:
         col_left, col_right = st.columns([1, 1])
         
-        # 用來記錄真正有被畫上紅線的，以及沒畫上紅線的項目
         successful_highlights = []
         unmatched_risks = []
         
@@ -347,7 +353,7 @@ elif menu == "AI 審閱雷達":
             
             if st.button("啟動 AI 深度語意高亮掃描", type="primary"):
                 with st.spinner("AI 正在逐字閱讀合約，尋找隱蔽風險..."):
-                    # ⚠️ 全新防呆 Prompt：強制要求按行輸出，並使用嚴格分隔符
+                    # ⚠️ 全新鐵血防呆 Prompt：強制要求 AI 在原文尋找最接近的錨點
                     extraction_prompt = """
                     請仔細審閱以下合約文本。你的任務是找出所有「高風險」、「對承建商不利」或「定義過於模糊/缺乏延伸保護(如缺EOT、保留金等)」的條款。
                     
@@ -355,15 +361,13 @@ elif menu == "AI 審閱雷達":
                     請每一行輸出一個風險點，必須使用以下格式：
                     [原文短句] ### [具體風險原因]
                     
-                    範例：
-                    工期: 30 個工作天 ### 缺乏工期延展(EOT)機制，承建商將承擔極大延誤風險。
-                    付款方式: 簽約 30% ### 付款節點模糊，無客觀計價標準。
-                    
-                    規則：
-                    1. 「原文短句」必須完全複製合約中確切存在的一段短句，一個字都不能改。
-                    2. 若風險是「沒寫全的條款（例如缺乏保留金）」，請找合約中相關的一句話提取（如擷取保固期的條文），或若真的找不到，[原文短句] 請直接填寫「整體合約缺失」。
-                    3. 每一行一筆資料，中間用 ### 分隔。
-                    4. 絕對不准使用任何 emoji 表情符號，不要輸出任何其他廢話。
+                    【強制錨點擷取規則】：
+                    因為我們要將風險在原文中「標紅」，所以即使是「沒寫全」的缺失，你也必須在原文找一句最相關的現有條文當作「錨點」！
+                    1. 如果缺乏工期延展(EOT)或工程變更(VO)，請強制提取原文中關於工期的句子，例如：「工期: 30 個工作天」。
+                    2. 如果缺乏保留金或付款定義模糊，請強制提取原文中關於付款的句子，例如：「付款方式: 簽約 30%、工程中期 50%、完工驗收 20%」或「保固期: 完工後 12 個月」。
+                    3. [原文短句] 必須 100% 複製原文中的純文字，絕對不能自己發明詞彙，也「絕對不能」填寫「整體合約缺失」這種抽象字眼！找不到完全對應的，就抓最接近的那句話。
+                    4. 每一行一筆資料，中間用 ### 分隔。
+                    5. 絕對不准使用 emoji。
                     """
                     ai_extracted_str = call_real_llm_api(extraction_prompt, st.session_state['raw_text'])
                     ai_extracted_str = ai_extracted_str.replace("```", "").replace("text", "").strip()
@@ -379,21 +383,18 @@ elif menu == "AI 審閱雷達":
             result_text = st.session_state['raw_text']
             result_text = re.sub(r"(\$[0-9,]+)", r'<span style="background-color: #fef2f2; color: #ef4444; font-weight: bold; border-bottom: 2px solid #ef4444; padding: 2px 4px; border-radius: 4px;">\1</span>', result_text)
 
-            # ⚠️ 升級版動態標紅：偵測是否成功標紅
             if 'ai_dynamic_keywords' in st.session_state:
                 for item in st.session_state['ai_dynamic_keywords']:
                     kw = item["keyword"]
                     reason = item["reason"]
                     matched = False
                     
-                    # 避免去匹配類似「整體合約缺失」這種系統佔位符
-                    if len(kw) > 1 and kw != "整體合約缺失":
+                    if len(kw) > 1:
                         chars = [re.escape(c) for c in kw if c.strip()]
                         if chars:
                             pattern = r'\s*'.join(chars)
                             replacement = r'<span style="background-color: #fef2f2; color: #ef4444; font-weight: bold; border-bottom: 2px solid #ef4444; padding: 2px 4px; border-radius: 4px;">\g<0></span>'
                             try:
-                                # subn 會回傳替換的次數 count
                                 result_text, count = re.subn(pattern, replacement, result_text)
                                 if count > 0:
                                     matched = True
@@ -419,13 +420,12 @@ elif menu == "AI 審閱雷達":
             if 'ai_dynamic_keywords' in st.session_state and len(st.session_state['ai_dynamic_keywords']) > 0:
                 st.markdown("### AI 動態鎖定清單")
                 
-                # 只有真正畫上紅線的，才顯示「標註原文」
                 for item in successful_highlights:
                     st.markdown(f'<div style="background-color: #fef2f2; border-left: 5px solid #ef4444; padding: 10px; margin-bottom: 8px; border-radius: 4px; color: #555;"><strong>標註原文：</strong>{item["keyword"]}<br><strong>風險原因：</strong>{item["reason"]}</div>', unsafe_allow_html=True)
                 
-                # 沒被畫紅線的隱性風險，拿掉「標註原文」四字，獨立顯示
                 for item in unmatched_risks:
-                    st.markdown(f'<div style="background-color: #fffbeb; border-left: 5px solid #f59e0b; padding: 10px; margin-bottom: 8px; border-radius: 4px; color: #555;"><strong>潛在合約缺失：</strong>{item["reason"]}</div>', unsafe_allow_html=True)
+                    # 💡 增加除錯顯示，讓我們能清楚看到 AI 到底回傳了什麼導致匹配失敗
+                    st.markdown(f'<div style="background-color: #fffbeb; border-left: 5px solid #f59e0b; padding: 10px; margin-bottom: 8px; border-radius: 4px; color: #555;"><strong>潛在合約缺失：</strong>{item["reason"]}<br><span style="font-size: 0.85em; color: #94a3b8;">(AI 嘗試尋找的關聯句但未完全匹配：{item["keyword"]})</span></div>', unsafe_allow_html=True)
                     
             elif 'ai_dynamic_keywords' in st.session_state and len(st.session_state['ai_dynamic_keywords']) == 0:
                  st.info("系統分析完畢，未發現隱患。")
