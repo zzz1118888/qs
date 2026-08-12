@@ -89,7 +89,7 @@ with st.sidebar:
     st.caption("Admin User: QS Director")
 
 # ==========================================
-# 核心引擎區 (已切換為智譜 GLM-4-Flash)
+# 核心引擎區 (智譜 GLM-4-Flash，資深嚴苛 QS 版)
 # ==========================================
 def extract_text(file):
     pdf_reader = PyPDF2.PdfReader(file)
@@ -107,22 +107,33 @@ def analyze_risk_dynamic(text):
         )
         
         system_prompt = """
-        你是一位專業的香港測量師 (QS)。你的任務是審閱合約並提取關鍵風險數據。
-        請尋找：不合理的免責條款、極短的索賠時效、高額或遞增的延期罰款(LD)、霸王/凌駕條款等。
+        你是一位極度嚴格且經驗豐富的香港資深工料測量師 (QS)。你的任務是審閱合約並進行「最嚴苛」的風險評估。
         
+        評分標準 (SCORE 0-100，分數越高代表對承建商或業主的潛在風險越大)：
+        1. 顯性風險：尋找高額延期罰款(LD)、極短索賠時效、免責聲明、霸王條款。
+        2. 隱性漏洞 (極度重要！)：合約「寫得太簡略」也是極大風險！請嚴格檢查並批判：
+           - 付款節點是否模糊？(例如僅寫「工程中期」、「完工驗收」，卻無客觀定義與計價標準，極易引發爭議)
+           - 是否缺失工期延展 (EOT) 與工程變更 (VO) 的保護條款？(遇惡劣天氣或變更將無法索賠)
+           - 是否缺失保留金 (Retention Money) 機制？(保固期將形同虛設)
+           - 驗收標準是否為主觀判定？
+           
+        【指令】：即使合約表面看起來沒有罰款或霸王條款，但只要發現上述「定義模糊」或「保護機制缺失」，請毫不猶豫地給予 60 到 85 之間的高風險分數，並嚴厲指出其漏洞！
+
         請嚴格依照以下格式輸出，絕不能包含任何額外對話或解釋，且絕對不准使用任何 emoji 表情符號：
-        SCORE: [評估0到100的總風險評分，90以上為極高風險]
-        PENALTY: [提取每日延期罰款基準金額，只需純數字，例如 50000。若無則填 0]
+        SCORE: [評估0到100的總風險評分]
+        PENALTY: [提取每日延期罰款基準金額，只需純數字。若無則填 0]
         FINDINGS:
-        - [具體風險點1]
-        - [具體風險點2]
+        - [具體風險點或隱性漏洞1]
+        - [具體風險點或隱性漏洞2]
+        
+        特別警告：如果合約中完全沒有高風險條款且條文極度完備無漏洞，請在 FINDINGS 下方僅輸出一行「- 無高風險條款」，絕對不要列出常規的標準條款！
         """
 
         response = client.chat.completions.create(
             model="glm-4-flash",
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"請分析此合約前段內容：\n{analyze_text}"}
+                {"role": "user", "content": f"請以最嚴苛的標準分析此合約前段內容：\n{analyze_text}"}
             ],
             temperature=0.1,
             max_tokens=500
@@ -144,12 +155,13 @@ def analyze_risk_dynamic(text):
             
         if "FINDINGS:" in ans:
             f_text = ans.split("FINDINGS:")[1]
-            findings = [line.strip().lstrip('-* ') for line in f_text.split('\n') if line.strip().startswith('-') or line.strip().startswith('*')]
+            raw_findings = [line.strip().lstrip('-* ') for line in f_text.split('\n') if line.strip().startswith('-') or line.strip().startswith('*')]
+            findings = [f for f in raw_findings if f and "無高風險" not in f and "未發現" not in f and f != "無"]
             
         if not findings: 
-            findings = ["AI 語意掃描完畢，未發現明顯的高危標準條款。"]
+            findings = ["AI 語意掃描完畢，未發現明顯的顯性或隱性風險。"]
             
-        return min(score, 100), [f for f in findings if f], base_penalty
+        return min(score, 100), findings, base_penalty
         
     except Exception as e:
         print(f"API Error: {e}")
@@ -273,7 +285,7 @@ elif menu == "AI 審閱雷達":
             if st.button("啟動 AI 深度語意高亮掃描", type="primary"):
                 with st.spinner("AI 正在逐字閱讀合約，尋找隱蔽風險..."):
                     extraction_prompt = """
-                    請找出以下合約文本中，所有「高風險、對承建商極度不利」的具體詞彙或短句（例如：不合理的時效、霸王條款、高額罰款等）。
+                    請找出以下合約文本中，所有「高風險、對承建商極度不利、或是定義過於模糊」的具體詞彙或短句（例如：不合理的時效、霸王條款、高額罰款、或是僅寫「工程中期」等過於簡略的節點）。
                     嚴格遵守以下規則：
                     1. 只能輸出原文中「確切存在」的字眼，一個字都不能改。
                     2. 每個找出的詞彙或短句之間，請用一個半形逗號 (,) 分隔。
@@ -291,8 +303,14 @@ elif menu == "AI 審閱雷達":
             if 'ai_dynamic_keywords' in st.session_state:
                 for kw in st.session_state['ai_dynamic_keywords']:
                     if len(kw) > 1:
-                        replacement = f'<span style="background-color: #fef2f2; color: #ef4444; font-weight: bold; border-bottom: 2px solid #ef4444; padding: 2px 4px; border-radius: 4px;">{kw}</span>'
-                        result_text = result_text.replace(kw, replacement)
+                        chars = [re.escape(c) for c in kw if c.strip()]
+                        if chars:
+                            pattern = r'\s*'.join(chars)
+                            replacement = r'<span style="background-color: #fef2f2; color: #ef4444; font-weight: bold; border-bottom: 2px solid #ef4444; padding: 2px 4px; border-radius: 4px;">\g<0></span>'
+                            try:
+                                result_text = re.sub(pattern, replacement, result_text)
+                            except Exception:
+                                pass
             
             result_text = result_text.replace('\n', '<br>')
             st.markdown(f"""
@@ -336,7 +354,7 @@ elif menu == "矩陣拓撲衝突偵測":
     st.markdown(r"運用線性代數中的相鄰矩陣 $A^k$，自動追蹤並可視化跨越百頁合約的隱蔽依賴關係與邏輯衝突。")
     
     if 'raw_text' in st.session_state:
-        st.warning("**系統偵測警告：發現隱蔽的依賴衝突！**")
+        st.warning("系統提示警告：發現隱蔽的依賴衝突！")
         st.markdown("""
         > **AI 矩陣運算結果顯示：**
         > 第一部分的「一般免責條款」與第二部分的「特殊凌駕條款」在文本語意空間中產生高強度的向量衝突。
