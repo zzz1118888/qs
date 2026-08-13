@@ -92,20 +92,35 @@ with st.sidebar:
 # ==========================================
 # 核心引擎區
 # ==========================================
-def extract_text(file):
-    pdf_reader = PyPDF2.PdfReader(file)
-    text = "\n".join([page.extract_text() for page in pdf_reader.pages if page.extract_text()])
-    return text
 
-# 🛡️ 新增統一的洗詞函數，專門對付 API 審查
+# 🛡️ 升級版：無視空白與損壞檔案的萃取引擎
+def extract_text(file):
+    try:
+        if file.size == 0:
+            return None
+            
+        pdf_reader = PyPDF2.PdfReader(file)
+        texts = []
+        for page in pdf_reader.pages:
+            page_text = page.extract_text()
+            if page_text:
+                texts.append(page_text.strip())
+                
+        text = "\n\n".join(texts).strip()
+        
+        if not text:
+            return None
+            
+        return text
+    except Exception:
+        return None
+
 def sanitize_for_api(text):
     safe_text = text.replace("中華民國", "當地").replace("民國", "當地")
-    # 如果未來還有其他會被擋的詞，可以直接加在這裡
     return safe_text
 
 def analyze_risk_dynamic(text):
     ZHIPU_API_KEY = "25b637c706134b1d99a60e0eda8001b7.6YQivJ8rbIDlNSTc"
-    # 呼叫 API 前，先清洗敏感詞
     analyze_text = sanitize_for_api(text[:4000])
     
     try:
@@ -117,8 +132,10 @@ def analyze_risk_dynamic(text):
         system_prompt = """
         你是一位極度嚴格且經驗豐富的香港資深工料測量師 (QS)。你的任務是審閱合約並進行「最嚴苛」的風險評估。
         
+        ⚠️ 【關鍵排除指令】：請「絕對忽略」所有由範本發行機構（如香港樓宇復修促進服務有限公司、市區重建局等）寫在文件最前面的「範本使用免責聲明」。你只須針對「業主」與「承建商/顧問」雙方實質的履約條款進行風險評估！
+        
         評分標準 (SCORE 0-100，分數越高代表對承建商或業主的潛在風險越大)：
-        1. 顯性風險：尋找高額延期罰款(LD)、極短索賠時效、免責聲明、霸王條款。
+        1. 顯性風險：尋找高額延期罰款(LD)、極短索賠時效、免責聲明(僅限合約雙方)、霸王條款。
         2. 隱性漏洞 (極度重要！)：合約「寫得太簡略」也是極大風險！請嚴格檢查並批判：
            - 付款節點是否模糊？(例如僅寫「工程中期」、「完工驗收」，卻無客觀定義與計價標準，極易引發爭議)
            - 是否缺失工期延展 (EOT) 與工程變更 (VO) 的保護條款？(遇惡劣天氣或變更將無法索賠)
@@ -179,7 +196,6 @@ def analyze_risk_dynamic(text):
 
 def calculate_topology_matrix_dynamic(text):
     ZHIPU_API_KEY = "25b637c706134b1d99a60e0eda8001b7.6YQivJ8rbIDlNSTc"
-    # 呼叫 API 前，先清洗敏感詞
     analyze_text = sanitize_for_api(text[:4000])
     
     try:
@@ -253,7 +269,6 @@ def calculate_topology_matrix_dynamic(text):
 
 def call_real_llm_api(prompt, context_text):
     ZHIPU_API_KEY = "25b637c706134b1d99a60e0eda8001b7.6YQivJ8rbIDlNSTc"
-    # 呼叫 API 前，雙重清洗提示詞與上下文
     safe_prompt = sanitize_for_api(prompt)
     safe_context = sanitize_for_api(context_text)
     
@@ -295,23 +310,36 @@ def call_real_llm_api(prompt, context_text):
 if menu == "總覽儀表板":
     st.header("招標文件風險審查總覽")
     
+    # 🛡️ 暫存殺手：清除舊版程式碼殘留的「0字元」損壞暫存
+    if 'raw_text' in st.session_state and len(st.session_state.get('raw_text', '')) < 10:
+        del st.session_state['raw_text']
+        if 'filename' in st.session_state: del st.session_state['filename']
+        if 'last_uploaded_file' in st.session_state: del st.session_state['last_uploaded_file']
+    
     uploaded_file = st.file_uploader("請上傳招標書或合約 (僅限 PDF 格式)", type="pdf")
     
     if uploaded_file is not None:
         if st.session_state.get('last_uploaded_file') != uploaded_file.name:
             with st.spinner('系統正在執行 AI 語意提取與多模型路由分析...'):
                 raw_text = extract_text(uploaded_file)
-                score, findings, base_penalty = analyze_risk_dynamic(raw_text)
                 
-                st.session_state.update({
-                    'raw_text': raw_text, 'filename': uploaded_file.name,
-                    'score': score, 'findings': findings, 'base_penalty': base_penalty,
-                    'last_uploaded_file': uploaded_file.name
-                })
-                if 'ai_dynamic_keywords' in st.session_state:
-                    del st.session_state['ai_dynamic_keywords']
-                if 'topology_data' in st.session_state:
-                    del st.session_state['topology_data']
+                # 🛡️ 掃描檔偵測：如果是圖片檔抓不到字，給予清楚的紅色警告
+                if raw_text is None or len(raw_text.strip()) < 10:
+                    st.error("❌ 檔案讀取失敗：您上傳的這份 PDF (高達數十 MB) 是「純圖片掃描檔 (Scanned PDF)」。\n\n系統目前使用基礎純文字解析引擎，尚未加裝 OCR (光學字元辨識) 模組，因此無法從圖片中讀出任何文字。\n\n💡 解決方案：請上傳由 Word/電子檔直接另存的「原生文字型 PDF」。")
+                    # 更新 last_uploaded_file 避免一直重複轉圈圈，並確保不存入無效文字
+                    st.session_state['last_uploaded_file'] = uploaded_file.name
+                else:
+                    score, findings, base_penalty = analyze_risk_dynamic(raw_text)
+                    
+                    st.session_state.update({
+                        'raw_text': raw_text, 'filename': uploaded_file.name,
+                        'score': score, 'findings': findings, 'base_penalty': base_penalty,
+                        'last_uploaded_file': uploaded_file.name
+                    })
+                    if 'ai_dynamic_keywords' in st.session_state:
+                        del st.session_state['ai_dynamic_keywords']
+                    if 'topology_data' in st.session_state:
+                        del st.session_state['topology_data']
 
     if 'raw_text' in st.session_state:
         st.success(f"解析完成：{st.session_state['filename']} (處理時間: 1.85s | 萃取字元數: {len(st.session_state['raw_text']):,})")
@@ -344,7 +372,11 @@ if menu == "總覽儀表板":
             st.plotly_chart(fig_radar, use_container_width=True)
             
         with st.expander("查看 AI 原始提取文本 (Raw Extracted Text)"):
-            st.text(st.session_state['raw_text'][:1500] + "...\n\n(文本過長，僅顯示前 1500 字)")
+            display_text = st.session_state['raw_text']
+            if len(display_text) > 2000:
+                st.text_area("以下為 PDF 萃取內容 (僅顯示前 2000 字)：", value=display_text[:2000] + "\n\n...(後續文本已省略)", height=300, disabled=True)
+            else:
+                st.text_area("以下為 PDF 完整萃取內容：", value=display_text, height=300, disabled=True)
     else:
         st.info("系統提示：請上傳 PDF 檔案以啟動 QSCopilot 分析引擎。")
 
@@ -368,6 +400,8 @@ elif menu == "AI 審閱雷達":
                 with st.spinner("AI 正在逐字閱讀合約，尋找隱蔽風險..."):
                     extraction_prompt = """
                     請仔細審閱以下合約文本。你的任務是找出所有「高風險」、「對承建商不利」或「定義過於模糊」的條款。
+                    
+                    ⚠️ 【關鍵排除指令】：請「絕對忽略」所有由範本發行機構（如香港樓宇復修促進服務有限公司、市區重建局等）寫在文件最前面的「範本使用免責聲明」。不要把這個當作合約風險！
                     
                     ⚠️ 【極度嚴格：防改寫死命令】：
                     1. 「原文短句」必須「一字不漏」從原文中複製！AI 常犯致命錯誤：原文寫「具備」，AI 改成「擁有」；原文寫「首14天」，AI 改成「首日」。只要你改了任何一個字，系統就會崩潰！
@@ -400,7 +434,6 @@ elif menu == "AI 審閱雷達":
             
             result_text = st.session_state['raw_text']
             
-            # ☢️ 核彈級 CJK 純文字濾水器：完全無視排版與任何標點符號
             if 'ai_dynamic_keywords' in st.session_state:
                 for item in st.session_state['ai_dynamic_keywords']:
                     kw = item["keyword"]
