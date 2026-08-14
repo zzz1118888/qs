@@ -421,11 +421,13 @@ elif menu == "AI 審閱雷達":
                             parts = line.split('|||', 1)
                             clean_kw = parts[0].strip()
                             clean_kw = re.sub(r'^(\d+\.|-|\*|#+|原文短句[:：]|標註原文[:：]|\[原文短句\])\s*', '', clean_kw).strip()
-                            clean_kw = clean_kw.strip('[]"\'')
+                            # 🛡️ 徹底清除 markdown 表格線與符號
+                            clean_kw = clean_kw.strip('[]"\'| \t')
                             
                             clean_reason = parts[1].strip()
                             clean_reason = re.sub(r'^(風險原因[:：]|具體風險原因[:：]|\[具體風險原因\])\s*', '', clean_reason).strip()
-                            clean_reason = clean_reason.strip('[]"\'')
+                            # 🛡️ 徹底清除 markdown 表格線與符號
+                            clean_reason = clean_reason.strip('[]"\'| \t')
                             
                             if clean_kw and clean_reason:
                                 keywords_data.append({"keyword": clean_kw, "reason": clean_reason})
@@ -475,7 +477,8 @@ elif menu == "AI 審閱雷達":
                 for item in successful_highlights:
                     st.markdown(f'<div style="background-color: #fef2f2; border-left: 5px solid #ef4444; padding: 10px; margin-bottom: 8px; border-radius: 4px; color: #555;"><strong>標註原文：</strong>{item["keyword"]}<br><strong>風險原因：</strong>{item["reason"]}</div>', unsafe_allow_html=True)
                 
-for item in unmatched_risks:
+                # 🛡️ 縮排已修正對齊，且刪除了醜陋的除錯文字！
+                for item in unmatched_risks:
                     st.markdown(f'<div style="background-color: #fffbeb; border-left: 5px solid #f59e0b; padding: 10px; margin-bottom: 8px; border-radius: 4px; color: #555;"><strong>潛在合約缺失：</strong>{item["reason"]}</div>', unsafe_allow_html=True)
                     
             elif 'ai_dynamic_keywords' in st.session_state and len(st.session_state['ai_dynamic_keywords']) == 0:
