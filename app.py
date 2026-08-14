@@ -475,8 +475,8 @@ elif menu == "AI 審閱雷達":
                 for item in successful_highlights:
                     st.markdown(f'<div style="background-color: #fef2f2; border-left: 5px solid #ef4444; padding: 10px; margin-bottom: 8px; border-radius: 4px; color: #555;"><strong>標註原文：</strong>{item["keyword"]}<br><strong>風險原因：</strong>{item["reason"]}</div>', unsafe_allow_html=True)
                 
-                for item in unmatched_risks:
-                    st.markdown(f'<div style="background-color: #fffbeb; border-left: 5px solid #f59e0b; padding: 10px; margin-bottom: 8px; border-radius: 4px; color: #555;"><strong>潛在合約缺失：</strong>{item["reason"]}<br><span style="font-size: 0.85em; color: #94a3b8;">(AI 未遵守複製貼上指令，導致無法在原文標紅: {item["keyword"]})</span></div>', unsafe_allow_html=True)
+for item in unmatched_risks:
+                    st.markdown(f'<div style="background-color: #fffbeb; border-left: 5px solid #f59e0b; padding: 10px; margin-bottom: 8px; border-radius: 4px; color: #555;"><strong>潛在合約缺失：</strong>{item["reason"]}</div>', unsafe_allow_html=True)
                     
             elif 'ai_dynamic_keywords' in st.session_state and len(st.session_state['ai_dynamic_keywords']) == 0:
                  st.info("系統分析完畢，未發現隱患。")
